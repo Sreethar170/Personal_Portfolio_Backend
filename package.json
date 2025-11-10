@@ -1,12 +1,12 @@
 {
 
-  "name": "backend_portfolio",
+  "name": "personal_portfolio_backend",
   "version": "1.0.0",
+  "type":"module",
   "description": "Portfolio",
   "main": "server.js",
   "scripts": {
-    "start": "set NODE_OPTIONS=--openssl-legacy-provider && node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "set NODE_OPTIONS=--openssl-legacy-provider && node server.js"
   },
   "author": "Sreethar N J",
   "license": "ISC",
