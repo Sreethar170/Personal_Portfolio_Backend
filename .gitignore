@@ -1,47 +1,39 @@
-# Node.js
+# Node modules
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Environment files
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Build output
-/build
-/dist
-/client/build
-/public/uploads
+.env.*.local
 
 # Logs
-logs
-*.log
-log.txt
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# OS-specific junk
+# Build outputs
+build/
+dist/
+*.log
+
+# OS files
 .DS_Store
 Thumbs.db
 
-# IDEs and editors
+# Google service account (keep secret)
+service-account.json
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Optional: Editor files
 .vscode/
 .idea/
-*.swp
+*.sublime-project
+*.sublime-workspace
 
-# Coverage / testing
+# Coverage reports
 coverage/
-.nyc_output/
-
-# Optional: ignore compiled TypeScript (if using)
-*.tsbuildinfo
-
-# Backup files
-*.bak
-*.tmp
-
-# Misc
-package-lock.json
-yarn.lock
