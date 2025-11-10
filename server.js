@@ -1,3 +1,4 @@
+// ===== Dependencies =====
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -6,6 +7,7 @@ import nodemailer from "nodemailer";
 import { google } from "googleapis";
 import fs from "fs";
 
+// ===== Config =====
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -17,7 +19,10 @@ app.use(express.json());
 // ===== MongoDB Connection =====
 mongoose
   .connect(process.env.MONGODB_URI, { dbName: process.env.DB_NAME })
-  .then(() => console.log("✅ MongoDB Connected"))
+  .then(() => {
+    console.log("✅ MongoDB Connected");
+    createDefaultUsers(); // Run after successful connection
+  })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 // ===== Nodemailer Setup =====
@@ -30,12 +35,19 @@ const transporter = nodemailer.createTransport({
 });
 
 // ===== Google Drive Setup =====
-const key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "{}");
+let key = {};
+try {
+  key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "{}");
+} catch (e) {
+  console.error("❌ Invalid GOOGLE_SERVICE_ACCOUNT_JSON format");
+}
+
 const auth = new google.auth.GoogleAuth({
   credentials: key,
   scopes: ["https://www.googleapis.com/auth/drive"],
 });
 const drive = google.drive({ version: "v3", auth });
+
 const PUBLIC_FOLDER_ID = process.env.PUBLIC_FOLDER_ID;
 const PRIVATE_FOLDER_ID = process.env.PRIVATE_FOLDER_ID;
 
@@ -58,7 +70,7 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model("User", userSchema);
 
-// ===== Contact Form =====
+// ===== Contact API =====
 app.post("/contact", async (req, res) => {
   try {
     const { name, mail, message } = req.body;
@@ -76,7 +88,7 @@ app.post("/contact", async (req, res) => {
       text: `Name: ${name}\nEmail: ${mail}\nMessage: ${message}`,
     });
 
-    // Notify sender
+    // Acknowledge sender
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: mail,
@@ -101,7 +113,8 @@ app.post("/api/secret-login", async (req, res) => {
     const user = await User.findOne({ username });
     if (!user) return res.status(401).json({ success: false, message: "User not found" });
 
-    if (password !== user.password) return res.status(401).json({ success: false, message: "Incorrect password" });
+    if (password !== user.password)
+      return res.status(401).json({ success: false, message: "Incorrect password" });
 
     const message = user.sole ? "Hello my sole, this is for you" : "Login successful";
     res.json({ success: true, message, isAdmin: user.isAdmin, sole: user.sole });
@@ -114,45 +127,49 @@ app.post("/api/secret-login", async (req, res) => {
 // ===== Auto-create Default Users =====
 const createDefaultUsers = async () => {
   try {
+    const adminUser = process.env.DEFAULT_ADMIN_USER;
+    const adminPass = process.env.DEFAULT_ADMIN_PASS;
+    const privateUser = process.env.PRIVATE_USER;
+    const privatePass = process.env.PRIVATE_PASSWORD;
+
+    if (!adminUser || !adminPass || !privateUser || !privatePass) {
+      console.error("❌ Missing environment variables for default users");
+      return;
+    }
+
     // Admin User
-    const existingAdmin = await User.findOne({ username: process.env.DEFAULT_ADMIN_USER });
+    const existingAdmin = await User.findOne({ username: adminUser });
     if (!existingAdmin) {
-      const admin = new User({
-        username: process.env.DEFAULT_ADMIN_USER,
-        password: process.env.DEFAULT_ADMIN_PASS,
+      await new User({
+        username: adminUser,
+        password: adminPass,
         isAdmin: true,
-      });
-      await admin.save();
-      console.log(`🚀 Admin created: username=${process.env.DEFAULT_ADMIN_USER}`);
+      }).save();
+      console.log(`🚀 Admin created: ${adminUser}`);
     } else {
       console.log("✅ Admin already exists");
     }
 
     // Private User
-    const existingPrivateUser = await User.findOne({ username: process.env.PRIVATE_USER });
+    const existingPrivateUser = await User.findOne({ username: privateUser });
     if (!existingPrivateUser) {
-      const privateUser = new User({
-        username: process.env.PRIVATE_USER,
-        password: process.env.PRIVATE_PASSWORD,
+      await new User({
+        username: privateUser,
+        password: privatePass,
         folderAccess: "private",
         sole: true,
         isAdmin: false,
-      });
-      await privateUser.save();
-      console.log(`🔒 Private user created: username=${process.env.PRIVATE_USER}`);
+      }).save();
+      console.log(`🔒 Private user created: ${privateUser}`);
     } else {
       console.log("✅ Private user already exists");
     }
-
   } catch (err) {
     console.error("❌ Failed to create default users:", err);
   }
 };
 
-// Call this at startup
-createDefaultUsers();
-
-// ===== Admin Create User =====
+// ===== Admin: Create User =====
 app.post("/api/admin/create-user", async (req, res) => {
   try {
     const { adminUsername, adminPassword, username, password, email, role, access } = req.body;
@@ -160,9 +177,8 @@ app.post("/api/admin/create-user", async (req, res) => {
       return res.status(400).json({ success: false, message: "All fields required" });
 
     const admin = await User.findOne({ username: adminUsername, isAdmin: true });
-    if (!admin) return res.status(401).json({ success: false, message: "Unauthorized" });
-
-    if (admin.password !== adminPassword) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!admin || admin.password !== adminPassword)
+      return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const existing = await User.findOne({ username });
     if (existing) return res.status(400).json({ success: false, message: "Username already exists" });
@@ -189,14 +205,13 @@ app.post("/api/admin/create-user", async (req, res) => {
   }
 });
 
-// ===== List Users =====
+// ===== Admin: List Users =====
 app.get("/api/admin/users", async (req, res) => {
   try {
     const { adminUsername, adminPassword } = req.query;
     const admin = await User.findOne({ username: adminUsername, isAdmin: true });
-    if (!admin) return res.status(403).json({ success: false, message: "Not authorized" });
-
-    if (admin.password !== adminPassword) return res.status(403).json({ success: false, message: "Not authorized" });
+    if (!admin || admin.password !== adminPassword)
+      return res.status(403).json({ success: false, message: "Not authorized" });
 
     const users = await User.find({}, { password: 0 });
     res.json({ success: true, users });
@@ -206,12 +221,13 @@ app.get("/api/admin/users", async (req, res) => {
   }
 });
 
-// ===== Delete User =====
+// ===== Admin: Delete User =====
 app.delete("/api/admin/delete-user", async (req, res) => {
   try {
     const { username } = req.body;
     const deleted = await User.findOneAndDelete({ username });
-    if (!deleted) return res.status(404).json({ success: false, message: "User not found" });
+    if (!deleted)
+      return res.status(404).json({ success: false, message: "User not found" });
     res.json({ success: true, message: "User deleted successfully" });
   } catch (err) {
     console.error("❌ Delete User Error:", err);
@@ -219,23 +235,20 @@ app.delete("/api/admin/delete-user", async (req, res) => {
   }
 });
 
-// ===== List Google Drive Files (Private/Public) =====
+// ===== Google Drive: List Files =====
 app.get("/api/list-files", async (req, res) => {
   try {
     const { type, username, password } = req.query;
-
-    // Fetch the user
     const user = await User.findOne({ username });
     if (!user || user.password !== password)
       return res.status(401).json({ success: false, message: "Unauthorized" });
 
     let folderId;
     if (user.sole) {
-      // Sole user can **only access private folder**
       folderId = PRIVATE_FOLDER_ID;
     } else if (type === "private") {
-      // Non-sole user must be admin to access private
-      if (!user.isAdmin) return res.status(403).json({ success: false, message: "Forbidden" });
+      if (!user.isAdmin)
+        return res.status(403).json({ success: false, message: "Forbidden" });
       folderId = PRIVATE_FOLDER_ID;
     } else {
       folderId = PUBLIC_FOLDER_ID;
@@ -263,14 +276,17 @@ app.get("/api/list-files", async (req, res) => {
   }
 });
 
-
-// ===== Stream Video/Image from Drive =====
+// ===== Google Drive: Stream Files =====
 app.get("/api/files/:fileId", async (req, res) => {
   try {
     const { fileId } = req.params;
-    const meta = await drive.files.get({ fileId, fields: "mimeType, size", supportsAllDrives: true });
-    const mimeType = meta.data.mimeType;
+    const meta = await drive.files.get({
+      fileId,
+      fields: "mimeType, size",
+      supportsAllDrives: true,
+    });
 
+    const mimeType = meta.data.mimeType;
     if (mimeType.startsWith("video/")) {
       const range = req.headers.range;
       if (!range) return res.status(400).send("Requires Range header for video streaming");
@@ -279,8 +295,8 @@ app.get("/api/files/:fileId", async (req, res) => {
       const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
       const start = Number(startStr);
       const end = endStr ? Number(endStr) : Math.min(start + 1e6, videoSize - 1);
-
       const contentLength = end - start + 1;
+
       res.writeHead(206, {
         "Content-Range": `bytes ${start}-${end}/${videoSize}`,
         "Accept-Ranges": "bytes",
