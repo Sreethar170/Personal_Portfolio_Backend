@@ -1,31 +1,30 @@
-// ===== Dependencies =====
+// server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
-import { google } from "googleapis";
-import fs from "fs";
+import fetch from "node-fetch";
 
-// ===== Config =====
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8000;
 
-// ===== Middleware =====
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_ORIGIN || "*", // set this on Render to your Vercel URL
+}));
 app.use(express.json());
 
-// ===== MongoDB Connection =====
+/* MongoDB */
 mongoose
   .connect(process.env.MONGODB_URI, { dbName: process.env.DB_NAME })
   .then(() => {
     console.log("✅ MongoDB Connected");
-    createDefaultUsers(); // Run after successful connection
+    createDefaultUsers();
   })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
-// ===== Nodemailer Setup =====
+/* Mailer - use app password or transactional mail provider */
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -34,24 +33,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ===== Google Drive Setup =====
-let key = {};
-try {
-  key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "{}");
-} catch (e) {
-  console.error("❌ Invalid GOOGLE_SERVICE_ACCOUNT_JSON format");
-}
-
-const auth = new google.auth.GoogleAuth({
-  credentials: key,
-  scopes: ["https://www.googleapis.com/auth/drive"],
-});
-const drive = google.drive({ version: "v3", auth });
-
-const PUBLIC_FOLDER_ID = process.env.PUBLIC_FOLDER_ID;
-const PRIVATE_FOLDER_ID = process.env.PRIVATE_FOLDER_ID;
-
-// ===== MongoDB Schemas =====
+/* Models */
 const contactSchema = new mongoose.Schema({
   name: String,
   mail: String,
@@ -70,51 +52,82 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model("User", userSchema);
 
-// ===== Contact API =====
+/* Helper: create default users */
+const createDefaultUsers = async () => {
+  try {
+    const adminUser = process.env.DEFAULT_ADMIN_USER;
+    const adminPass = process.env.DEFAULT_ADMIN_PASS;
+    const privateUser = process.env.PRIVATE_USER;
+    const privatePass = process.env.PRIVATE_PASSWORD;
+
+    if (!adminUser || !adminPass || !privateUser || !privatePass) {
+      console.warn("⚠️ Missing env vars for default users");
+      return;
+    }
+
+    const existingAdmin = await User.findOne({ username: adminUser });
+    if (!existingAdmin) {
+      await new User({ username: adminUser, password: adminPass, isAdmin: true }).save();
+      console.log(`🚀 Admin created: ${adminUser}`);
+    } else console.log("✅ Admin exists");
+
+    const existingPrivate = await User.findOne({ username: privateUser });
+    if (!existingPrivate) {
+      await new User({
+        username: privateUser, password: privatePass, folderAccess: "private", sole: true, isAdmin: false
+      }).save();
+      console.log(`🔒 Private user created: ${privateUser}`);
+    } else console.log("✅ Private user exists");
+  } catch (err) {
+    console.error("❌ Failed creating default users:", err);
+  }
+};
+
+/* Contact endpoint */
 app.post("/contact", async (req, res) => {
   try {
     const { name, mail, message } = req.body;
-    if (!name || !mail || !message)
-      return res.status(400).json({ success: false, message: "All fields required" });
+    if (!name || !mail || !message) return res.status(400).json({ success: false, message: "All fields required" });
 
     const contact = new Contact({ name, mail, message });
     await contact.save();
 
-    // Notify admin
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: process.env.EMAIL_USER,
-      subject: `New Message from ${name}`,
-      text: `Name: ${name}\nEmail: ${mail}\nMessage: ${message}`,
-    });
+    // send notification to site owner
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: process.env.EMAIL_USER,
+        subject: `New Message from ${name}`,
+        text: `Name: ${name}\nEmail: ${mail}\nMessage: ${message}`,
+      });
 
-    // Acknowledge sender
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: mail,
-      subject: `Thanks for reaching out, ${name}!`,
-      text: `Hi ${name},\n\nYour message has been received. We'll get back to you soon.\n\n– Team`,
-    });
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: mail,
+        subject: `Thanks for reaching out, ${name}!`,
+        text: `Hi ${name},\n\nYour message has been received. We'll get back to you soon.\n\n– Team`,
+      });
+    } catch (mailErr) {
+      console.warn("⚠️ Mail failed:", mailErr.message);
+    }
 
-    res.json({ success: true, message: "Message sent successfully!" });
+    res.json({ success: true, message: "Message saved" });
   } catch (err) {
     console.error("❌ Contact Error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// ===== Login =====
+/* Secret login */
 app.post("/api/secret-login", async (req, res) => {
   try {
     const { username, password } = req.body;
-    if (!username || !password)
-      return res.status(400).json({ success: false, message: "All fields required" });
+    if (!username || !password) return res.status(400).json({ success: false, message: "All fields required" });
 
     const user = await User.findOne({ username });
     if (!user) return res.status(401).json({ success: false, message: "User not found" });
 
-    if (password !== user.password)
-      return res.status(401).json({ success: false, message: "Incorrect password" });
+    if (password !== user.password) return res.status(401).json({ success: false, message: "Incorrect password" });
 
     const message = user.sole ? "Hello my sole, this is for you" : "Login successful";
     res.json({ success: true, message, isAdmin: user.isAdmin, sole: user.sole });
@@ -124,94 +137,45 @@ app.post("/api/secret-login", async (req, res) => {
   }
 });
 
-// ===== Auto-create Default Users =====
-const createDefaultUsers = async () => {
-  try {
-    const adminUser = process.env.DEFAULT_ADMIN_USER;
-    const adminPass = process.env.DEFAULT_ADMIN_PASS;
-    const privateUser = process.env.PRIVATE_USER;
-    const privatePass = process.env.PRIVATE_PASSWORD;
-
-    if (!adminUser || !adminPass || !privateUser || !privatePass) {
-      console.error("❌ Missing environment variables for default users");
-      return;
-    }
-
-    // Admin User
-    const existingAdmin = await User.findOne({ username: adminUser });
-    if (!existingAdmin) {
-      await new User({
-        username: adminUser,
-        password: adminPass,
-        isAdmin: true,
-      }).save();
-      console.log(`🚀 Admin created: ${adminUser}`);
-    } else {
-      console.log("✅ Admin already exists");
-    }
-
-    // Private User
-    const existingPrivateUser = await User.findOne({ username: privateUser });
-    if (!existingPrivateUser) {
-      await new User({
-        username: privateUser,
-        password: privatePass,
-        folderAccess: "private",
-        sole: true,
-        isAdmin: false,
-      }).save();
-      console.log(`🔒 Private user created: ${privateUser}`);
-    } else {
-      console.log("✅ Private user already exists");
-    }
-  } catch (err) {
-    console.error("❌ Failed to create default users:", err);
-  }
-};
-
-// ===== Admin: Create User =====
+/* Admin: create user */
 app.post("/api/admin/create-user", async (req, res) => {
   try {
     const { adminUsername, adminPassword, username, password, email, role, access } = req.body;
-    if (!adminUsername || !adminPassword || !username || !password || !email)
-      return res.status(400).json({ success: false, message: "All fields required" });
+    if (!adminUsername || !adminPassword || !username || !password || !email) return res.status(400).json({ success: false, message: "All fields required" });
 
     const admin = await User.findOne({ username: adminUsername, isAdmin: true });
-    if (!admin || admin.password !== adminPassword)
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!admin || admin.password !== adminPassword) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const existing = await User.findOne({ username });
-    if (existing) return res.status(400).json({ success: false, message: "Username already exists" });
+    if (existing) return res.status(400).json({ success: false, message: "Username exists" });
 
-    const newUser = new User({
-      username,
-      password,
-      isAdmin: role === "admin",
-      folderAccess: access || "public",
-    });
+    const newUser = new User({ username, password, isAdmin: role === "admin", folderAccess: access || "public" });
     await newUser.save();
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Your Account Credentials",
-      text: `Hello ${username},\nYour account has been created.\nUsername: ${username}\nPassword: ${password}\nRole: ${role || "User"}`,
-    });
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: "Your Account Credentials",
+        text: `Hello ${username},\nYour account has been created.\nUsername: ${username}\nPassword: ${password}\nRole: ${role || "User"}`,
+      });
+    } catch (mailErr) {
+      console.warn("⚠️ Could not email new user:", mailErr.message);
+    }
 
-    res.json({ success: true, message: "User created successfully" });
+    res.json({ success: true, message: "User created" });
   } catch (err) {
     console.error("❌ Create User Error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// ===== Admin: List Users =====
+/* Admin: list users */
 app.get("/api/admin/users", async (req, res) => {
   try {
     const { adminUsername, adminPassword } = req.query;
     const admin = await User.findOne({ username: adminUsername, isAdmin: true });
-    if (!admin || admin.password !== adminPassword)
-      return res.status(403).json({ success: false, message: "Not authorized" });
+    if (!admin || admin.password !== adminPassword) return res.status(403).json({ success: false, message: "Not authorized" });
 
     const users = await User.find({}, { password: 0 });
     res.json({ success: true, users });
@@ -221,77 +185,83 @@ app.get("/api/admin/users", async (req, res) => {
   }
 });
 
-// ===== Admin: Delete User =====
 app.delete("/api/admin/delete-user", async (req, res) => {
   try {
     const { username } = req.body;
     const deleted = await User.findOneAndDelete({ username });
-    if (!deleted)
-      return res.status(404).json({ success: false, message: "User not found" });
-    res.json({ success: true, message: "User deleted successfully" });
+    if (!deleted) return res.status(404).json({ success: false, message: "User not found" });
+    res.json({ success: true, message: "User deleted" });
   } catch (err) {
     console.error("❌ Delete User Error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// ===== Google Drive: List Files =====
+/* === Google Drive public folder listing & file serving ===
+   NOTE: Files MUST be shared as "Anyone with the link -> Viewer" in Drive.
+   This implementation uses a free Google API KEY and public folder listing.
+*/
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const PUBLIC_FOLDER_ID = process.env.PUBLIC_FOLDER_ID;
+const PRIVATE_FOLDER_ID = process.env.PRIVATE_FOLDER_ID || null;
+
 app.get("/api/list-files", async (req, res) => {
   try {
-    const { type, username, password } = req.query;
+    // Basic auth check — frontend sends username/password as query params
+    const { type = "public", username, password } = req.query;
+    if (!username || !password) return res.status(401).json({ success: false, message: "Auth required" });
+
     const user = await User.findOne({ username });
-    if (!user || user.password !== password)
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!user || user.password !== password) return res.status(401).json({ success: false, message: "Unauthorized" });
 
+    // choose folder
     let folderId;
-    if (user.sole) {
+    if (user.sole) folderId = PRIVATE_FOLDER_ID;
+    else if (type === "private") {
+      if (!user.isAdmin) return res.status(403).json({ success: false, message: "Forbidden" });
       folderId = PRIVATE_FOLDER_ID;
-    } else if (type === "private") {
-      if (!user.isAdmin)
-        return res.status(403).json({ success: false, message: "Forbidden" });
-      folderId = PRIVATE_FOLDER_ID;
-    } else {
-      folderId = PUBLIC_FOLDER_ID;
-    }
+    } else folderId = PUBLIC_FOLDER_ID;
 
-    const response = await drive.files.list({
-      q: `'${folderId}' in parents and (mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`,
-      fields: "files(id, name, mimeType)",
-      orderBy: "createdTime desc",
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-    });
+    if (!GOOGLE_API_KEY || !folderId) return res.status(400).json({ success: false, message: "Missing API key or folder id" });
 
-    const files = response.data.files.map((file) => ({
-      id: file.id,
-      name: file.name,
-      mimeType: file.mimeType,
-      url: `/api/files/${file.id}`,
+    const q = `'${folderId}' in parents and (mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`;
+    const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,createdTime)&orderBy=createdTime desc&key=${GOOGLE_API_KEY}`;
+
+    const driveRes = await fetch(listUrl);
+    const driveJson = await driveRes.json();
+    const files = (driveJson.files || []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      url: `/api/files/${f.id}`,
     }));
 
     res.json({ success: true, files });
   } catch (err) {
     console.error("❌ Drive List Files Error:", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// ===== Google Drive: Stream Files =====
-app.get("/api/files/:fileId", async (req, res) => {
+/* Serve / stream files by ID using the API key (files must be public) */
+app.get("/api/files/:id", async (req, res) => {
   try {
-    const { fileId } = req.params;
-    const meta = await drive.files.get({
-      fileId,
-      fields: "mimeType, size",
-      supportsAllDrives: true,
-    });
+    const { id } = req.params;
+    if (!GOOGLE_API_KEY) return res.status(500).send("Missing Google API key");
 
-    const mimeType = meta.data.mimeType;
+    // get metadata
+    const metaUrl = `https://www.googleapis.com/drive/v3/files/${id}?fields=mimeType,size&key=${GOOGLE_API_KEY}`;
+    const metaRes = await fetch(metaUrl);
+    const meta = await metaRes.json();
+    if (!meta || !meta.mimeType) return res.status(404).send("File not found or not public");
+
+    const mimeType = meta.mimeType;
+
     if (mimeType.startsWith("video/")) {
       const range = req.headers.range;
-      if (!range) return res.status(400).send("Requires Range header for video streaming");
+      if (!range) return res.status(400).send("Requires Range header for video");
 
-      const videoSize = Number(meta.data.size);
+      const videoSize = Number(meta.size);
       const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
       const start = Number(startStr);
       const end = endStr ? Number(endStr) : Math.min(start + 1e6, videoSize - 1);
@@ -304,18 +274,14 @@ app.get("/api/files/:fileId", async (req, res) => {
         "Content-Type": mimeType,
       });
 
-      const driveRes = await drive.files.get(
-        { fileId, alt: "media", supportsAllDrives: true },
-        { responseType: "stream" }
-      );
-      driveRes.data.pipe(res);
+      const videoUrl = `https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${GOOGLE_API_KEY}`;
+      const r = await fetch(videoUrl, { headers: { Range: `bytes=${start}-${end}` } });
+      r.body.pipe(res);
     } else {
+      const fileUrl = `https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${GOOGLE_API_KEY}`;
       res.setHeader("Content-Type", mimeType);
-      const driveRes = await drive.files.get(
-        { fileId, alt: "media", supportsAllDrives: true },
-        { responseType: "stream" }
-      );
-      driveRes.data.pipe(res);
+      const r = await fetch(fileUrl);
+      r.body.pipe(res);
     }
   } catch (err) {
     console.error("❌ Drive File Fetch Error:", err);
@@ -323,5 +289,7 @@ app.get("/api/files/:fileId", async (req, res) => {
   }
 });
 
-// ===== Start Server =====
+/* Health */
+app.get("/", (req, res) => res.send("OK"));
+
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
