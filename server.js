@@ -204,94 +204,47 @@ app.delete("/api/admin/delete-user", async (req, res) => {
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const PUBLIC_FOLDER_ID = process.env.PUBLIC_FOLDER_ID;
 const PRIVATE_FOLDER_ID = process.env.PRIVATE_FOLDER_ID || null;
-
+const PUBLIC_SCRIPT_URL = process.env.PUBLIC_SCRIPT_URL;
+const PRIVATE_SCRIPT_URL = process.env.PRIVATE_SCRIPT_URL ;
+/* LIST FILES (GOOGLE SCRIPT) */
 app.get("/api/list-files", async (req, res) => {
   try {
-    // Basic auth check — frontend sends username/password as query params
-    const { type = "public", username, password } = req.query;
-    if (!username || !password) return res.status(401).json({ success: false, message: "Auth required" });
+    const { username, password, type = "public" } = req.query;
+
+    if (!username || !password)
+      return res.status(401).json({ success: false });
 
     const user = await User.findOne({ username });
-    if (!user || user.password !== password) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!user || user.password !== password)
+      return res.status(401).json({ success: false });
 
-    // choose folder
-    let folderId;
-    if (user.sole) folderId = PRIVATE_FOLDER_ID;
-    else if (type === "private") {
-      if (!user.isAdmin) return res.status(403).json({ success: false, message: "Forbidden" });
-      folderId = PRIVATE_FOLDER_ID;
-    } else folderId = PUBLIC_FOLDER_ID;
+    let scriptUrl = process.env.PUBLIC_SCRIPT_URL;
 
-    if (!GOOGLE_API_KEY || !folderId) return res.status(400).json({ success: false, message: "Missing API key or folder id" });
+    if (type === "private") {
+      if (!user.isAdmin && !user.sole)
+        return res.status(403).json({ success: false });
+      scriptUrl = process.env.PRIVATE_SCRIPT_URL;
+    }
 
-    const q = `'${folderId}' in parents and (mimeType contains 'image/' or mimeType contains 'video/') and trashed=false`;
-    const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,createdTime)&orderBy=createdTime desc&key=${GOOGLE_API_KEY}`;
-
-    const driveRes = await fetch(listUrl);
-    const driveJson = await driveRes.json();
-    const files = (driveJson.files || []).map((f) => ({
-      id: f.id,
-      name: f.name,
-      mimeType: f.mimeType,
-      url: `/api/files/${f.id}`,
-    }));
+    const response = await fetch(scriptUrl);
+    const files = await response.json();
 
     res.json({ success: true, files });
   } catch (err) {
-    console.error("❌ Drive List Files Error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false });
   }
 });
 
-/* Serve / stream files by ID using the API key (files must be public) */
-app.get("/api/files/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!GOOGLE_API_KEY) return res.status(500).send("Missing Google API key");
+/* STREAM FILE */
+app.get("/api/files", async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send("Missing file url");
 
-    // get metadata
-    const metaUrl = `https://www.googleapis.com/drive/v3/files/${id}?fields=mimeType,size&key=${GOOGLE_API_KEY}`;
-    const metaRes = await fetch(metaUrl);
-    const meta = await metaRes.json();
-    if (!meta || !meta.mimeType) return res.status(404).send("File not found or not public");
-
-    const mimeType = meta.mimeType;
-
-    if (mimeType.startsWith("video/")) {
-      const range = req.headers.range;
-      if (!range) return res.status(400).send("Requires Range header for video");
-
-      const videoSize = Number(meta.size);
-      const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
-      const start = Number(startStr);
-      const end = endStr ? Number(endStr) : Math.min(start + 1e6, videoSize - 1);
-      const contentLength = end - start + 1;
-
-      res.writeHead(206, {
-        "Content-Range": `bytes ${start}-${end}/${videoSize}`,
-        "Accept-Ranges": "bytes",
-        "Content-Length": contentLength,
-        "Content-Type": mimeType,
-      });
-
-      const videoUrl = `https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${GOOGLE_API_KEY}`;
-      const r = await fetch(videoUrl, { headers: { Range: `bytes=${start}-${end}` } });
-      r.body.pipe(res);
-    } else {
-      const fileUrl = `https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${GOOGLE_API_KEY}`;
-      res.setHeader("Content-Type", mimeType);
-      const r = await fetch(fileUrl);
-      r.body.pipe(res);
-    }
-  } catch (err) {
-    console.error("❌ Drive File Fetch Error:", err);
-    res.status(500).send("Error fetching file");
-  }
-});
-
+  const r = await fetch(url);
+  res.setHeader("Content-Type", r.headers.get("content-type"));
+  r.body.pipe(res);
+})
 /* Health */
 app.get("/", (req, res) => res.send("OK"));
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
