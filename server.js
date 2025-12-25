@@ -122,18 +122,36 @@ app.post("/contact", async (req, res) => {
 app.post("/api/secret-login", async (req, res) => {
   try {
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ success: false, message: "All fields required" });
+    if (!username || !password)
+      return res.status(400).json({ success: false });
 
     const user = await User.findOne({ username });
-    if (!user) return res.status(401).json({ success: false, message: "User not found" });
+    if (!user || user.password !== password)
+      return res.status(401).json({ success: false });
 
-    if (password !== user.password) return res.status(401).json({ success: false, message: "Incorrect password" });
+    let access = {
+      publicUrl: null,
+      privateUrl: null,
+    };
 
-    const message = user.sole ? "Hello my sole, this is for you" : "Login successful";
-    res.json({ success: true, message, isAdmin: user.isAdmin, sole: user.sole });
+    if (user.isAdmin) {
+      access.publicUrl = process.env.PUBLIC_SCRIPT_URL;
+      access.privateUrl = process.env.PRIVATE_SCRIPT_URL;
+    } else if (user.sole) {
+      access.privateUrl = process.env.PRIVATE_SCRIPT_URL;
+    } else {
+      access.publicUrl = process.env.PUBLIC_SCRIPT_URL;
+    }
+
+    res.json({
+      success: true,
+      username: user.username,
+      isAdmin: user.isAdmin,
+      sole: user.sole,
+      access,
+    });
   } catch (err) {
-    console.error("❌ Login Error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false });
   }
 });
 
@@ -209,28 +227,14 @@ const PRIVATE_SCRIPT_URL = process.env.PRIVATE_SCRIPT_URL ;
 /* LIST FILES (GOOGLE SCRIPT) */
 app.get("/api/list-files", async (req, res) => {
   try {
-    const { username, password, type = "public" } = req.query;
-
-    if (!username || !password)
-      return res.status(401).json({ success: false });
-
-    const user = await User.findOne({ username });
-    if (!user || user.password !== password)
-      return res.status(401).json({ success: false });
-
-    let scriptUrl = process.env.PUBLIC_SCRIPT_URL;
-
-    if (type === "private") {
-      if (!user.isAdmin && !user.sole)
-        return res.status(403).json({ success: false });
-      scriptUrl = process.env.PRIVATE_SCRIPT_URL;
-    }
+    const { scriptUrl } = req.query;
+    if (!scriptUrl) return res.status(400).json({ success: false });
 
     const response = await fetch(scriptUrl);
     const files = await response.json();
 
     res.json({ success: true, files });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false });
   }
 });
