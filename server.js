@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 8000;
 
 app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || "*", 
+  origin: process.env.FRONTEND_ORIGIN || "*", // set this on Render to your Vercel URL
 }));
 app.use(express.json());
 
