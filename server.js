@@ -10,9 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8000;
 
-app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || "*", // set this on Render to your Vercel URL
-}));
+app.use(cors());
 app.use(express.json());
 
 /* MongoDB */
@@ -230,24 +228,44 @@ app.get("/api/list-files", async (req, res) => {
     const { scriptUrl } = req.query;
     if (!scriptUrl) return res.status(400).json({ success: false });
 
-    const response = await fetch(scriptUrl);
-    const files = await response.json();
+    const r = await fetch(scriptUrl);
+    if (!r.ok) throw new Error("Drive script failed");
 
+    const files = await r.json();
     res.json({ success: true, files });
-  } catch {
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ success: false });
   }
 });
 
 /* STREAM FILE */
 app.get("/api/files", async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).send("Missing file url");
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).send("Missing url");
 
-  const r = await fetch(url);
-  res.setHeader("Content-Type", r.headers.get("content-type"));
-  r.body.pipe(res);
-})
+    const range = req.headers.range;
+    const headers = range ? { Range: range } : {};
+
+    const r = await fetch(url, { headers });
+    if (!r.ok) return res.sendStatus(r.status);
+
+    res.setHeader("Content-Type", r.headers.get("content-type"));
+    res.setHeader("Accept-Ranges", "bytes");
+
+    if (range && r.headers.get("content-range")) {
+      res.status(206);
+      res.setHeader("Content-Range", r.headers.get("content-range"));
+      res.setHeader("Content-Length", r.headers.get("content-length"));
+    }
+
+    r.body.pipe(res);
+  } catch (e) {
+    console.error("❌ Stream error:", e);
+    res.sendStatus(500);
+  }
+});
 /* Health */
 app.get("/", (req, res) => res.send("OK"));
 
