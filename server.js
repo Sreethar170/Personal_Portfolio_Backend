@@ -5,8 +5,6 @@ import cors from "cors";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
 import fetch from "node-fetch";
-import puppeteer from "puppeteer";
-
 
 dotenv.config();
 const app = express();
@@ -26,13 +24,22 @@ mongoose
 
 /* Mailer - use app password or transactional mail provider */
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false, // MUST be false for 587
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    pass: process.env.EMAIL_PASS, // APP PASSWORD ONLY
   },
 });
-
+(async () => {
+  try {
+    await transporter.verify();
+    console.log("✅ Mail transporter ready");
+  } catch (err) {
+    console.error("❌ Mail transporter failed:", err.message);
+  }
+})();
 /* Models */
 const contactSchema = new mongoose.Schema({
   name: String,
