@@ -23,23 +23,17 @@ mongoose
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 /* Mailer - use app password or transactional mail provider */
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false, // MUST be false for 587
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // APP PASSWORD ONLY
-  },
-});
-(async () => {
-  try {
-    await transporter.verify();
-    console.log("✅ Mail transporter ready");
-  } catch (err) {
-    console.error("❌ Mail transporter failed:", err.message);
-  }
-})();
+async function sendMail({ to, subject, body, replyTo }) {
+  const r = await fetch(process.env.GMAIL_SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to, subject, body, replyTo }),
+  });
+
+  const result = await r.json();
+  if (!result.success) throw new Error("Gmail send failed");
+}
+
 /* Models */
 const contactSchema = new mongoose.Schema({
   name: String,
@@ -94,37 +88,30 @@ const createDefaultUsers = async () => {
 app.post("/contact", async (req, res) => {
   try {
     const { name, mail, message } = req.body;
-    if (!name || !mail || !message) return res.status(400).json({ success: false, message: "All fields required" });
+    if (!name || !mail || !message)
+      return res.status(400).json({ success: false });
 
-    const contact = new Contact({ name, mail, message });
-    await contact.save();
+    await Contact.create({ name, mail, message });
 
-    // send notification to site owner
-    try {
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: process.env.EMAIL_USER,
-        subject: `New Message from ${name}`,
-        text: `Name: ${name}\nEmail: ${mail}\nMessage: ${message}`,
-      });
+    await sendMail({
+      to: process.env.OWNER_EMAIL,
+      subject: `New message from ${name}`,
+      body: `Name: ${name}\nEmail: ${mail}\n\n${message}`,
+      replyTo: mail,
+    });
 
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: mail,
-        subject: `Thanks for reaching out, ${name}!`,
-        text: `Hi ${name},\n\nYour message has been received. We'll get back to you soon.\n\n– Team`,
-      });
-    } catch (mailErr) {
-      console.warn("⚠️ Mail failed:", mailErr.message);
-    }
+    await sendMail({
+      to: mail,
+      subject: "Message received",
+      body: `Hi ${name},\n\nWe received your message.`,
+    });
 
-    res.json({ success: true, message: "Message saved" });
+    res.json({ success: true });
   } catch (err) {
-    console.error("❌ Contact Error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("❌ Mail Error:", err.message);
+    res.status(500).json({ success: false });
   }
 });
-
 /* Secret login */
 app.post("/api/secret-login", async (req, res) => {
   try {
