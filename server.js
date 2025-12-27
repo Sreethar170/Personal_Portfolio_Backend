@@ -5,6 +5,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
 import fetch from "node-fetch";
+import puppeteer from "puppeteer";
+
 
 dotenv.config();
 const app = express();
@@ -264,6 +266,57 @@ app.get("/api/files", async (req, res) => {
   } catch (e) {
     console.error("❌ Stream error:", e);
     res.sendStatus(500);
+  }
+});
+
+
+
+app.post("/api/screenshot", async (req, res) => {
+  const { url, token } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ success: false, message: "URL required" });
+  }
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      headless: "new",
+    });
+
+    const page = await browser.newPage();
+
+    // Optional auth (JWT / cookie-based)
+    if (token) {
+      await page.setExtraHTTPHeaders({
+        Authorization: `Bearer ${token}`,
+      });
+    }
+
+    await page.setViewport({ width: 1366, height: 768 });
+
+    // Load page
+    await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: 30000,
+    });
+
+    // Optional delay (for animations / lazy loading)
+    await page.waitForTimeout(1000);
+
+    const screenshot = await page.screenshot({
+      type: "png",
+      fullPage: true,
+    });
+
+    res.setHeader("Content-Type", "image/png");
+    res.send(screenshot);
+  } catch (err) {
+    console.error("Screenshot failed:", err);
+    res.status(500).json({ success: false, message: "Screenshot failed" });
+  } finally {
+    if (browser) await browser.close();
   }
 });
 /* Health */

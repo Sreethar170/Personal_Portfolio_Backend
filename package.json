@@ -1,29 +1,58 @@
 {
 
   "name": "personal_portfolio_backend",
+
   "version": "1.0.0",
-  "type":"module",
+
+  "type": "module",
+
   "description": "Portfolio",
+
   "main": "server.js",
+
   "scripts": {
+
     "start": "set NODE_OPTIONS=--openssl-legacy-provider && node server.js"
+
   },
+
   "author": "Sreethar N J",
+
   "license": "ISC",
+
   "dependencies": {
+
     "bcrypt": "^6.0.0",
+
     "bcryptjs": "^3.0.3",
+
     "cookie-session": "^2.1.1",
+
     "cors": "^2.8.5",
+
     "dotenv": "^17.2.3",
+
     "express": "^5.1.0",
+
     "fs": "^0.0.1-security",
+
     "googleapis": "^165.0.0",
+
     "mongoose": "^8.19.3",
+
     "multer": "^2.0.2",
+
     "nodemailer": "^7.0.10",
+
+    "puppeteer": "^24.34.0",
+
     "resend": "^6.4.2",
+
     "winston": "^3.18.3"
+
   },
+
   "keywords": []
+
 }
+
