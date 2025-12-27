@@ -164,16 +164,37 @@ app.post("/api/admin/create-user", async (req, res) => {
     const newUser = new User({ username, password, isAdmin: role === "admin", folderAccess: access || "public" });
     await newUser.save();
 
-    try {
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: "Your Account Credentials",
-        text: `Hello ${username},\nYour account has been created.\nUsername: ${username}\nPassword: ${password}\nRole: ${role || "User"}`,
-      });
-    } catch (mailErr) {
-      console.warn("⚠️ Could not email new user:", mailErr.message);
-    }
+   try {
+  await sendMail({
+    to: email,
+    subject: "Your Account Has Been Created",
+    body: `Hello ${username},
+Your account has been successfully created. Below are your login credentials:
+
+Username: ${username}
+Password: ${password}
+Role: ${role || "User"}
+
+Login URL: https://personal-portfolio-frontend-sreethar170.vercel.app/
+
+For security reasons:
+
+Change your password immediately after your first login.
+
+Do not share your credentials with anyone.
+
+If you did not request this account, contact us immediately.
+
+If you face any issues accessing your account, reply to this email or contact support.
+
+Regards,
+Sreethar N J
+System Administrator`,
+  });
+} catch (mailErr) {
+  console.warn("⚠️ Could not email new user:", mailErr.message);
+}
+
 
     res.json({ success: true, message: "User created" });
   } catch (err) {
